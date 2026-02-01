@@ -1,0 +1,793 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+usage() {
+  cat <<'USAGE'
+whisperer: record mic audio, transcribe with OpenAI, inject text into focused app.
+
+Usage:
+  whisperer [--duration SECONDS]
+  whisperer --loop --chunk-seconds SECONDS
+  whisperer --ptt
+  whisperer --ptt-list-devices
+  whisperer --install-service
+  whisperer --uninstall
+  whisperer --doctor
+  whisperer --print-config
+  whisperer --doctor --fix
+  whisperer --self-test
+  whisperer --help-advanced
+
+Common options:
+  --duration SECONDS        One-shot record duration (default: 8)
+  --loop                    Record/transcribe/inject in chunks until Ctrl+C
+  --chunk-seconds SECONDS   Chunk size for --loop (default: 4)
+  --ptt                     Push-to-talk (hold key to record)
+  --ptt-list-devices        List keyboard input devices for --ptt-device
+  --install-service         Install and enable ydotoold user service + config
+  --uninstall               Disable service and remove config (asks confirmation)
+  --doctor                  Run basic diagnostics
+  --self-test               Record 4s, transcribe, and inject "self test"
+  -h, --help                Show this help
+  --help-advanced           Show all options
+USAGE
+}
+
+usage_advanced() {
+  cat <<'USAGE'
+
+Install / maintenance:
+  --config PATH             Config file path (default: ~/.config/whisperer/config)
+  --fix                     With --doctor, attempt automatic fixes
+  --print-config            Print effective config path and contents
+  --yes                     Skip confirmation prompts (use with --install-service/--uninstall)
+
+Dictation:
+  --mode MODE               auto|type|paste (default: auto)
+  --model NAME              OpenAI model (default: whisper-1; also: gpt-4o-mini-transcribe, gpt-4o-transcribe)
+  --rate HZ                 Sample rate (default: 16000)
+  --channels N              Channels (default: 1)
+  --no-start-daemon         Do not auto-start ydotoold (use if you manage it separately)
+  --ptt-key KEY             Push-to-talk key (default: KEY_RIGHTALT; requires python3-evdev)
+  --ptt-device PATH         Input device (default: auto-detect keyboard)
+  --ptt-list-devices        List keyboard input devices for --ptt-device
+  --ptt-device-match STR    Prefer devices whose path contains STR
+  --paste-keys KEYS         Paste key combo (default: ctrl+v)
+
+Audio / gating / debug:
+  --rms-threshold VALUE     RMS gate (0 disables). Typical: 0.005–0.02
+                           RMS = average loudness (0.0–1.0). Sampling only happens when threshold > 0.
+  --rms-sample-seconds N    Seconds of audio to sample for RMS (default: 0.5)
+  --no-inject               Do not inject text (useful for testing)
+  --print-rms               Print measured audio RMS (default: off)
+  --no-print-rms            Disable RMS printing
+  --debug                   Show status and key events
+USAGE
+}
+
+die() {
+  printf "error: %s\n" "$*" >&2
+  exit 1
+}
+
+require_cmd() {
+  command -v "$1" >/dev/null 2>&1 || die "missing dependency: $1"
+}
+
+load_config() {
+  local path="$1"
+  if [ -f "$path" ]; then
+    set -a
+    # shellcheck disable=SC1090
+    . "$path"
+    set +a
+  fi
+}
+
+install_service() {
+  local config_dir unit_src unit_dst systemd_dir
+  config_dir="${XDG_CONFIG_HOME:-$HOME/.config}/whisperer"
+  systemd_dir="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
+  unit_src="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/systemd/ydotoold.service"
+  unit_dst="${systemd_dir}/ydotoold.service"
+
+  mkdir -p "$config_dir" "$systemd_dir"
+  if [ ! -f "$config_dir/config" ]; then
+    cat <<'EOF' > "$config_dir/config"
+# whisperer config
+# OPENAI_API_KEY=your_key_here
+# WHISPERER_SOCKET=/tmp/.ydotool_socket
+# WHISPERER_MODEL=whisper-1
+# WHISPERER_RATE=16000
+# WHISPERER_CHANNELS=1
+# WHISPERER_MODE=auto
+# WHISPERER_START_DAEMON=1
+# WHISPERER_PASTE_KEYS=ctrl+v
+# WHISPERER_NO_INJECT=0
+# WHISPERER_RMS_THRESHOLD=0
+# WHISPERER_PRINT_RMS=0
+# WHISPERER_RMS_SAMPLE_SECONDS=0.5
+# WHISPERER_DEBUG=0
+# WHISPERER_PTT=0
+# WHISPERER_PTT_KEY=KEY_RIGHTALT
+# WHISPERER_PTT_DEVICE=
+# WHISPERER_PTT_DEVICE_MATCH=
+EOF
+  fi
+
+  [ -f "$unit_src" ] || die "missing unit file: $unit_src"
+  cp "$unit_src" "$unit_dst"
+
+  if command -v systemctl >/dev/null 2>&1; then
+    systemctl --user daemon-reload
+    systemctl --user enable --now ydotoold.service
+  else
+    printf "systemctl not found; install a systemd user service manually.\n" >&2
+  fi
+
+  if [ "$YES" != "1" ]; then
+    printf "Setup complete.\n"
+    printf "Edit your config: %s\n" "$config_dir/config"
+  fi
+}
+
+uninstall_all() {
+  local config_dir unit_dst
+  config_dir="${XDG_CONFIG_HOME:-$HOME/.config}/whisperer"
+  unit_dst="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user/ydotoold.service"
+
+  if [ "$YES" != "1" ]; then
+    printf "This will disable the ydotoold user service and remove %s\n" "$config_dir"
+    printf "Continue? [y/N]: "
+    read -r answer
+    case "$answer" in
+      y|Y|yes|YES) ;;
+      *) printf "Cancelled.\n"; exit 0 ;;
+    esac
+  fi
+
+  if command -v systemctl >/dev/null 2>&1; then
+    systemctl --user disable --now ydotoold.service >/dev/null 2>&1 || true
+    systemctl --user daemon-reload >/dev/null 2>&1 || true
+  fi
+
+  rm -f "$unit_dst"
+  rm -rf "$config_dir"
+  printf "Uninstall complete.\n"
+}
+
+print_config() {
+  local path
+  path="$CONFIG_PATH"
+  printf "Config path: %s\n" "$path"
+  if [ -f "$path" ]; then
+    while IFS= read -r line; do
+      case "$line" in
+        OPENAI_API_KEY=*)
+          printf "OPENAI_API_KEY=REDACTED\n" ;;
+        *)
+          printf "%s\n" "$line" ;;
+      esac
+    done < "$path"
+  else
+    printf "Config file not found.\n"
+  fi
+}
+
+doctor() {
+  printf "whisperer doctor\n"
+  printf "-------------------\n"
+  printf "pw-record: %s\n" "$(command -v pw-record || echo missing)"
+  printf "ydotool:   %s\n" "$(command -v ydotool || echo missing)"
+  printf "ydotoold:  %s\n" "$(command -v ydotoold || echo missing)"
+  printf "wl-copy:   %s\n" "$(command -v wl-copy || echo missing)"
+  printf "curl:      %s\n" "$(command -v curl || echo missing)"
+  printf "python3:   %s\n" "$(command -v python3 || echo missing)"
+
+  if [ -e /dev/uinput ]; then
+    ls -l /dev/uinput
+  else
+    printf "/dev/uinput: missing\n"
+  fi
+
+  if pgrep -x ydotoold >/dev/null 2>&1; then
+    printf "ydotoold: running\n"
+  else
+    printf "ydotoold: not running\n"
+  fi
+
+  if [ -n "${YDOTOOL_SOCKET:-}" ]; then
+    printf "YDOTOOL_SOCKET=%s\n" "$YDOTOOL_SOCKET"
+  fi
+}
+
+self_test() {
+  if [ -z "${OPENAI_API_KEY:-}" ]; then
+    die "OPENAI_API_KEY not set. Add it to config or env."
+  fi
+
+  require_cmd pw-record
+  require_cmd curl
+  require_cmd ydotool
+  require_cmd wl-copy
+  require_cmd python3
+
+  if [ -n "${YDOTOOL_SOCKET:-}" ]; then
+    SOCKET_PATH="$YDOTOOL_SOCKET"
+  else
+    SOCKET_PATH="${WHISPERER_SOCKET:-$(select_socket_path)}"
+    export YDOTOOL_SOCKET="$SOCKET_PATH"
+  fi
+
+  if [ "$START_DAEMON" = "1" ]; then
+    if ! pgrep -x ydotoold >/dev/null 2>&1; then
+      if [ -S "$SOCKET_PATH" ]; then
+        rm -f "$SOCKET_PATH"
+      fi
+      ydotoold -p "$SOCKET_PATH" -P 0660 -o "$(id -u)":"$(id -g)" >/dev/null 2>&1 &
+      disown || true
+      sleep 1
+    fi
+  fi
+
+  local test_seconds="4"
+  TMP_WAV="$(mktemp --suffix=.wav)"
+  TMP_JSON="$(mktemp --suffix=.json)"
+  trap 'rm -f "$TMP_WAV" "$TMP_JSON"' EXIT
+
+  record_once "$test_seconds" "$TMP_WAV"
+  [ -s "$TMP_WAV" ] || die "self-test recording failed"
+  if [ "$(should_transcribe "$TMP_WAV" "$RMS_THRESHOLD")" != "1" ]; then
+    printf "Self-test skipped (audio RMS below threshold).\n"
+    exit 0
+  fi
+  transcribe "$TMP_WAV" "$TMP_JSON"
+  TEXT="$(extract_text "$TMP_JSON")"
+  if [ -z "$TEXT" ]; then
+    printf "Self-test transcription returned empty text. Raw response:\n" >&2
+    cat "$TMP_JSON" >&2
+    exit 1
+  fi
+
+  inject_text "self test"
+  printf "Self-test OK. Transcribed: %s\n" "$TEXT"
+}
+
+record_once() {
+  local seconds="$1"
+  local wav="$2"
+  timeout "${seconds}" pw-record --rate "${RATE}" --channels "${CHANNELS}" "$wav" >/dev/null 2>&1 || true
+}
+
+transcribe() {
+  local wav="$1"
+  local json="$2"
+
+  curl -sS https://api.openai.com/v1/audio/transcriptions \
+    -H "Authorization: Bearer ${OPENAI_API_KEY:?OPENAI_API_KEY not set}" \
+    -F "model=${MODEL}" \
+    -F "file=@${wav}" \
+    > "$json"
+}
+
+extract_text() {
+  local json="$1"
+  python3 - "$json" <<'PY'
+import json, sys
+path = sys.argv[1]
+try:
+    with open(path, "r", encoding="utf-8") as f:
+        data = json.load(f)
+    text = (data.get("text") or "").strip()
+    print(text)
+except Exception:
+    print("")
+PY
+}
+
+inject_text() {
+  local text="$1"
+
+  if [ -z "$text" ]; then
+    return 0
+  fi
+
+  local mode="${MODE}"
+  if [ "$mode" = "auto" ]; then
+    if printf "%s" "$text" | LC_ALL=C grep -q '[^ -~\t\r\n]'; then
+      mode="paste"
+    else
+      mode="type"
+    fi
+  fi
+
+  if [ "$NO_INJECT" = "1" ]; then
+    return 0
+  fi
+  if [ "$mode" = "paste" ]; then
+    printf "%s" "$text" | wl-copy
+    case "$PASTE_KEYS" in
+      ctrl+v)
+        ydotool key 29:1 47:1 47:0 29:0 ;;
+      ctrl+shift+v)
+        ydotool key 29:1 42:1 47:1 47:0 42:0 29:0 ;;
+      *)
+        die "unsupported paste keys: $PASTE_KEYS (use ctrl+v or ctrl+shift+v)" ;;
+    esac
+  elif [ "$mode" = "type" ]; then
+    ydotool type "$text"
+  else
+    die "unknown mode: $mode"
+  fi
+}
+
+audio_rms() {
+  local wav="$1"
+  local sample_seconds="${2:-0.5}"
+  python3 - "$wav" <<'PY'
+import sys, wave, math
+path = sys.argv[1]
+sample_seconds = 0.5
+try:
+    sample_seconds = float(sys.argv[2])
+except Exception:
+    pass
+try:
+    with wave.open(path, "rb") as w:
+        fr = w.getframerate()
+        n = w.getnframes()
+        max_frames = int(fr * sample_seconds)
+        read_frames = n if max_frames <= 0 else min(n, max_frames)
+        data = w.readframes(read_frames)
+        if not data:
+            print("0.0")
+            sys.exit(0)
+        import array
+        samples = array.array('h', data)
+        if not samples:
+            print("0.0")
+            sys.exit(0)
+        ss = 0.0
+        for s in samples:
+            ss += float(s) * float(s)
+        rms = math.sqrt(ss / len(samples)) / 32768.0
+        print(rms)
+except Exception:
+    print("0.0")
+PY
+}
+
+ptt_detect_device() {
+  if [ -n "$PTT_DEVICE" ]; then
+    printf "%s" "$PTT_DEVICE"
+    return
+  fi
+  local best_dev="" best_score="-1" dev name score
+  for dev in /dev/input/by-id/*-event-kbd; do
+    [ -e "$dev" ] || continue
+    name="$(python3 - "$dev" <<'PY'
+import sys
+try:
+    from evdev import InputDevice
+    print(InputDevice(sys.argv[1]).name)
+except Exception:
+    print("")
+PY
+)"
+    score=0
+    if [ -n "$PTT_DEVICE_MATCH" ] && [[ "$dev" == *"$PTT_DEVICE_MATCH"* ]]; then
+      score=100
+    elif [ -n "$name" ] && [[ "$name" =~ [Kk]eyboard ]]; then
+      score=50
+    elif [[ "$dev" == *keyboard* || "$dev" == *Keyboard* || "$dev" == *kbd* ]]; then
+      score=20
+    fi
+    if [ "$score" -gt "$best_score" ]; then
+      best_score="$score"
+      best_dev="$dev"
+    fi
+  done
+  printf "%s" "$best_dev"
+}
+
+ptt_normalize_key() {
+  local key="$1"
+  if [ -z "$key" ]; then
+    printf "KEY_RIGHTALT"
+    return
+  fi
+  if [[ "$key" == KEY_* ]]; then
+    printf "%s" "$key"
+  else
+    printf "KEY_%s" "$key"
+  fi
+}
+
+ptt_loop() {
+  local device key
+  device="$(ptt_detect_device)"
+  [ -n "$device" ] || die "no keyboard device found; set --ptt-device"
+  key="$(ptt_normalize_key "$PTT_KEY")"
+
+  python3 - "$device" "$key" "$DEBUG" <<'PY'
+import sys
+try:
+    from evdev import InputDevice, ecodes
+except Exception:
+    print("ERROR: python-evdev missing", flush=True)
+    sys.exit(2)
+
+path = sys.argv[1]
+key_name = sys.argv[2]
+debug = sys.argv[3] == "1"
+
+if not hasattr(ecodes, key_name):
+    print("ERROR: unknown key " + key_name, flush=True)
+    sys.exit(3)
+
+key_code = getattr(ecodes, key_name)
+try:
+    dev = InputDevice(path)
+except Exception as e:
+    print("ERROR: cannot open device " + path + " (" + str(e) + ")", flush=True)
+    sys.exit(4)
+
+if debug:
+    print(f"INFO: ptt device {path}", flush=True)
+    print(f"INFO: ptt key {key_name}", flush=True)
+
+try:
+    for event in dev.read_loop():
+        if event.type != ecodes.EV_KEY:
+            continue
+        if event.code == key_code:
+            if event.value == 1:
+                print("DOWN", flush=True)
+            elif event.value == 0:
+                print("UP", flush=True)
+        elif debug and event.value in (0, 1):
+            try:
+                name = ecodes.KEY[event.code]
+            except Exception:
+                name = str(event.code)
+            state = "DOWN" if event.value == 1 else "UP"
+            print(f"DBG {name} {state}", flush=True)
+except KeyboardInterrupt:
+    pass
+PY
+}
+
+ptt_list_devices() {
+  for dev in /dev/input/by-id/*-event-kbd; do
+    if [ -e "$dev" ]; then
+      printf "%s\n" "$dev"
+    fi
+  done
+}
+
+should_transcribe() {
+  local wav="$1"
+  local thr="$2"
+  local rms
+  if python3 - "$thr" <<'PY'
+import sys
+thr=float(sys.argv[1])
+print("1" if thr <= 0 else "0")
+PY
+  then
+    return 0
+  fi
+  rms="$(audio_rms "$wav" "${RMS_SAMPLE_SECONDS:-0.5}")"
+  if [ "$PRINT_RMS" = "1" ]; then
+    python3 - "$rms" <<'PY' >&2
+import sys
+rms=float(sys.argv[1])
+print(f"audio RMS: {rms:.3f}")
+PY
+  fi
+  python3 - "$rms" "$thr" <<'PY'
+import sys
+rms=float(sys.argv[1])
+thr=float(sys.argv[2])
+print("1" if rms >= thr else "0")
+PY
+}
+
+DURATION="8"
+LOOP="0"
+CHUNK_SECONDS="4"
+CONFIG_PATH="${XDG_CONFIG_HOME:-$HOME/.config}/whisperer/config"
+ACTION=""
+YES="0"
+FIX="0"
+NO_INJECT="${WHISPERER_NO_INJECT:-0}"
+RMS_THRESHOLD="${WHISPERER_RMS_THRESHOLD:-0}"
+PRINT_RMS="${WHISPERER_PRINT_RMS:-0}"
+RMS_SAMPLE_SECONDS="${WHISPERER_RMS_SAMPLE_SECONDS:-0.5}"
+DEBUG="${WHISPERER_DEBUG:-0}"
+PASTE_KEYS="${WHISPERER_PASTE_KEYS:-ctrl+v}"
+PTT="${WHISPERER_PTT:-0}"
+PTT_KEY="${WHISPERER_PTT_KEY:-KEY_RIGHTALT}"
+PTT_DEVICE="${WHISPERER_PTT_DEVICE:-}"
+PTT_DEVICE_MATCH="${WHISPERER_PTT_DEVICE_MATCH:-}"
+PTT_LIST="0"
+
+select_socket_path() {
+  local uid
+  uid="$(id -u)"
+  if [ -S "/tmp/.ydotool_socket" ]; then
+    printf "/tmp/.ydotool_socket"
+    return
+  fi
+  if [ -S "/run/user/${uid}/.ydotool_socket" ]; then
+    printf "/run/user/%s/.ydotool_socket" "$uid"
+    return
+  fi
+  printf "/tmp/.ydotool_socket"
+}
+
+# Pre-scan for --config to load config before parsing other flags.
+if [ "$#" -gt 1 ]; then
+  args=("$@")
+  for ((i=0; i<${#args[@]}; i++)); do
+    if [ "${args[$i]}" = "--config" ]; then
+      CONFIG_PATH="${args[$((i+1))]:-}"
+      break
+    fi
+  done
+fi
+
+load_config "$CONFIG_PATH"
+
+MODE="${WHISPERER_MODE:-auto}"
+MODEL="${WHISPERER_MODEL:-whisper-1}"
+RATE="${WHISPERER_RATE:-16000}"
+CHANNELS="${WHISPERER_CHANNELS:-1}"
+START_DAEMON="${WHISPERER_START_DAEMON:-1}"
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --install-service)
+      ACTION="install"; shift ;;
+    --uninstall)
+      ACTION="uninstall"; shift ;;
+    --doctor)
+      ACTION="doctor"; shift ;;
+    --print-config)
+      ACTION="print-config"; shift ;;
+    --self-test)
+      ACTION="self-test"; shift ;;
+    --no-inject)
+      NO_INJECT="1"; shift ;;
+    --rms-threshold)
+      RMS_THRESHOLD="${2:-}"; shift 2 ;;
+    --print-rms)
+      PRINT_RMS="1"; shift ;;
+    --no-print-rms)
+      PRINT_RMS="0"; shift ;;
+    --rms-sample-seconds)
+      RMS_SAMPLE_SECONDS="${2:-}"; shift 2 ;;
+    --debug)
+      DEBUG="1"; shift ;;
+    --paste-keys)
+      PASTE_KEYS="${2:-}"; shift 2 ;;
+    --ptt)
+      PTT="1"; shift ;;
+    --ptt-key)
+      PTT_KEY="${2:-}"; shift 2 ;;
+    --ptt-device)
+      PTT_DEVICE="${2:-}"; shift 2 ;;
+    --ptt-device-match)
+      PTT_DEVICE_MATCH="${2:-}"; shift 2 ;;
+    --ptt-list-devices)
+      PTT_LIST="1"; shift ;;
+    --yes)
+      YES="1"; shift ;;
+    --fix)
+      FIX="1"; shift ;;
+    --duration)
+      DURATION="${2:-}"; shift 2 ;;
+    --loop)
+      LOOP="1"; shift ;;
+    --chunk-seconds)
+      CHUNK_SECONDS="${2:-}"; shift 2 ;;
+    --mode)
+      MODE="${2:-}"; shift 2 ;;
+    --model)
+      MODEL="${2:-}"; shift 2 ;;
+    --rate)
+      RATE="${2:-}"; shift 2 ;;
+    --channels)
+      CHANNELS="${2:-}"; shift 2 ;;
+    --no-start-daemon)
+      START_DAEMON="0"; shift ;;
+    --config)
+      CONFIG_PATH="${2:-}"; shift 2 ;;
+    -h|--help)
+      usage; exit 0 ;;
+    --help-advanced)
+      usage; usage_advanced; exit 0 ;;
+    *)
+      die "unknown arg: $1" ;;
+  esac
+done
+
+if [ "$ACTION" = "install" ]; then
+  install_service
+  exit 0
+fi
+if [ "$ACTION" = "uninstall" ]; then
+  uninstall_all
+  exit 0
+fi
+if [ "$ACTION" = "doctor" ]; then
+  doctor
+  if [ "$FIX" = "1" ]; then
+    if [ -z "${YDOTOOL_SOCKET:-}" ]; then
+      export YDOTOOL_SOCKET="${WHISPERER_SOCKET:-$(select_socket_path)}"
+      printf "Set YDOTOOL_SOCKET=%s\n" "$YDOTOOL_SOCKET"
+    fi
+
+    if [ -S "$YDOTOOL_SOCKET" ]; then
+      rm -f "$YDOTOOL_SOCKET"
+      printf "Removed stale socket: %s\n" "$YDOTOOL_SOCKET"
+    fi
+
+    if ! pgrep -x ydotoold >/dev/null 2>&1; then
+      ydotoold -p "$YDOTOOL_SOCKET" -P 0660 -o "$(id -u)":"$(id -g)" >/dev/null 2>&1 &
+      disown || true
+      printf "Started ydotoold.\n"
+    fi
+  fi
+  exit 0
+fi
+if [ "$ACTION" = "print-config" ]; then
+  print_config
+  exit 0
+fi
+if [ "$ACTION" = "self-test" ]; then
+  self_test
+  exit 0
+fi
+
+if [ "$PTT_LIST" = "1" ]; then
+  ptt_list_devices
+  exit 0
+fi
+
+require_cmd pw-record
+require_cmd curl
+require_cmd ydotool
+require_cmd wl-copy
+require_cmd python3
+
+if [ "$PTT" = "1" ]; then
+  if ! python3 - <<'PY' >/dev/null 2>&1
+try:
+    import evdev  # noqa: F401
+except Exception:
+    raise SystemExit(1)
+PY
+  then
+    die "push-to-talk requires python3-evdev (install: sudo apt install python3-evdev)"
+  fi
+fi
+
+if [ -n "${YDOTOOL_SOCKET:-}" ]; then
+  SOCKET_PATH="$YDOTOOL_SOCKET"
+else
+  SOCKET_PATH="${WHISPERER_SOCKET:-$(select_socket_path)}"
+  export YDOTOOL_SOCKET="$SOCKET_PATH"
+fi
+
+if [ "$START_DAEMON" = "1" ]; then
+  if ! pgrep -x ydotoold >/dev/null 2>&1; then
+    if [ -S "$SOCKET_PATH" ]; then
+      rm -f "$SOCKET_PATH"
+    fi
+    ydotoold -p "$SOCKET_PATH" -P 0660 -o "$(id -u)":"$(id -g)" >/dev/null 2>&1 &
+    disown || true
+  fi
+fi
+
+if [ "$PTT" = "1" ]; then
+  record_pid=""
+  tmp_wav=""
+  tmp_json=""
+  while read -r evt; do
+    case "$evt" in
+      INFO:*)
+        printf "%s\n" "$evt" >&2 ;;
+      ERROR:*)
+        die "$evt" ;;
+      DOWN)
+        if [ -z "$record_pid" ]; then
+          if [ "$DEBUG" = "1" ]; then
+            printf "ptt: record start\n" >&2
+          fi
+          tmp_wav="$(mktemp --suffix=.wav)"
+          tmp_json="$(mktemp --suffix=.json)"
+          pw-record --rate "${RATE}" --channels "${CHANNELS}" "$tmp_wav" >/dev/null 2>&1 &
+          record_pid="$!"
+        fi
+        ;;
+      UP)
+        if [ -n "$record_pid" ]; then
+          if [ "$DEBUG" = "1" ]; then
+            printf "ptt: record stop\n" >&2
+          fi
+          kill -INT "$record_pid" >/dev/null 2>&1 || true
+          wait "$record_pid" >/dev/null 2>&1 || true
+          record_pid=""
+          if [ -s "$tmp_wav" ]; then
+            if [ "$(should_transcribe "$tmp_wav" "$RMS_THRESHOLD")" = "1" ]; then
+              if [ "$DEBUG" = "1" ]; then
+                printf "ptt: transcribe\n" >&2
+              fi
+              transcribe "$tmp_wav" "$tmp_json"
+              TEXT="$(extract_text "$tmp_json")"
+              if [ "$DEBUG" = "1" ]; then
+                printf "ptt: transcript: %s\n" "$TEXT" >&2
+              fi
+              inject_text "$TEXT"
+            fi
+          fi
+          rm -f "$tmp_wav" "$tmp_json"
+          tmp_wav=""
+          tmp_json=""
+        fi
+        ;;
+    esac
+  done < <(ptt_loop)
+  exit 0
+fi
+
+TMP_WAV="$(mktemp --suffix=.wav)"
+TMP_JSON="$(mktemp --suffix=.json)"
+
+cleanup() {
+  rm -f "$TMP_WAV" "$TMP_JSON"
+}
+trap cleanup EXIT
+
+if [ "$LOOP" = "1" ]; then
+  while true; do
+    if [ "$DEBUG" = "1" ]; then
+      printf "record: start (%ss)\n" "$CHUNK_SECONDS" >&2
+    fi
+    record_once "$CHUNK_SECONDS" "$TMP_WAV"
+    if [ ! -s "$TMP_WAV" ]; then
+      continue
+    fi
+    if [ "$(should_transcribe "$TMP_WAV" "$RMS_THRESHOLD")" != "1" ]; then
+      continue
+    fi
+    if [ "$DEBUG" = "1" ]; then
+      printf "transcribe\n" >&2
+    fi
+    transcribe "$TMP_WAV" "$TMP_JSON" || continue
+    TEXT="$(extract_text "$TMP_JSON")"
+    if [ "$DEBUG" = "1" ]; then
+      printf "transcript: %s\n" "$TEXT" >&2
+    fi
+    inject_text "$TEXT"
+  done
+else
+  if [ "$DEBUG" = "1" ]; then
+    printf "record: start (%ss)\n" "$DURATION" >&2
+  fi
+  record_once "$DURATION" "$TMP_WAV"
+  [ -s "$TMP_WAV" ] || exit 0
+  if [ "$(should_transcribe "$TMP_WAV" "$RMS_THRESHOLD")" != "1" ]; then
+    exit 0
+  fi
+  if [ "$DEBUG" = "1" ]; then
+    printf "transcribe\n" >&2
+  fi
+  transcribe "$TMP_WAV" "$TMP_JSON"
+  TEXT="$(extract_text "$TMP_JSON")"
+  if [ "$DEBUG" = "1" ]; then
+    printf "transcript: %s\n" "$TEXT" >&2
+  fi
+  inject_text "$TEXT"
+fi
