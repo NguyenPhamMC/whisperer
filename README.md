@@ -76,7 +76,13 @@ After running --install-service, add your OpenAI API key in:
 
 ## Quick start
 
-Run one-shot dictation (default 8s):
+Push-to-talk (default, hold key to record; default key: Right Alt):
+
+```sh
+whisperer
+```
+
+Run one-shot dictation (fixed duration):
 
 ```sh
 whisperer --duration 8
@@ -88,22 +94,16 @@ Run chunked dictation (keeps recording 4s chunks until Ctrl+C):
 whisperer --loop --chunk-seconds 4
 ```
 
-Push-to-talk (hold key to record, default: Right Alt):
-
-```sh
-whisperer --ptt
-```
-
 If Right Alt is used for AltGr on your layout, pick another key:
 
 ```sh
-whisperer --ptt --ptt-key KEY_F9
+whisperer --ptt-key KEY_F9
 ```
 
 Some layouts report Right Alt as `KEY_ALTGR` instead of `KEY_RIGHTALT`:
 
 ```sh
-whisperer --ptt --ptt-key KEY_ALTGR
+whisperer --ptt-key KEY_ALTGR
 ```
 
 List keyboard devices (for --ptt-device):
@@ -115,13 +115,13 @@ whisperer --ptt-list-devices
 Prefer a specific device by name fragment:
 
 ```sh
-whisperer --ptt --ptt-device-match SONiX
+whisperer --ptt-device-match SONiX
 ```
 
 Show status and key events:
 
 ```sh
-whisperer --ptt --debug
+whisperer --debug
 ```
 
 ## Notes
@@ -202,9 +202,8 @@ Environment variables (also supported in config file):
 - `WHISPERER_PRINT_RMS` (`1` to print RMS, default: `0`)
 - `WHISPERER_RMS_SAMPLE_SECONDS` (default: `0.5`)
 - `WHISPERER_DEBUG` (`1` to enable debug output, default: `0`)
-- `WHISPERER_PTT` (`1` to enable push-to-talk, default: `0`)
 - `WHISPERER_PTT_KEY` (default: `KEY_RIGHTALT`)
-- `WHISPERER_PTT_DEVICE` (default: auto-detect)
-- `WHISPERER_PTT_DEVICE_MATCH` (default: empty; substring match)
+- `WHISPERER_PTT_DEVICE` (default: empty = auto-detect; set to a `/dev/input/by-id/*-event-kbd` path from `whisperer --ptt-list-devices`. The literal string `auto-detect` is not special and will be treated as a path.)
+- `WHISPERER_PTT_DEVICE_MATCH` (default: empty; plain substring match on device path, not regex. Only used when `WHISPERER_PTT_DEVICE` is empty. When empty, no filter is applied and the best keyboard device is auto-detected.)
 
 Run `./bin/whisperer --help` for common options and `whisperer --help-advanced` for all options.

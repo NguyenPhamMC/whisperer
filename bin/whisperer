@@ -6,7 +6,8 @@ usage() {
 whisperer: record mic audio, transcribe with OpenAI, inject text into focused app.
 
 Usage:
-  whisperer [--duration SECONDS]
+  whisperer
+  whisperer --duration SECONDS
   whisperer --loop --chunk-seconds SECONDS
   whisperer --ptt
   whisperer --ptt-list-devices
@@ -19,10 +20,10 @@ Usage:
   whisperer --help-advanced
 
 Common options:
-  --duration SECONDS        One-shot record duration (default: 8)
+  --duration SECONDS        One-shot record duration (default: 8; implies one-shot)
   --loop                    Record/transcribe/inject in chunks until Ctrl+C
   --chunk-seconds SECONDS   Chunk size for --loop (default: 4)
-  --ptt                     Push-to-talk (hold key to record)
+  --ptt                     Push-to-talk (hold key to record; default)
   --ptt-list-devices        List keyboard input devices for --ptt-device
   --install-service         Install and enable ydotoold user service + config
   --uninstall               Disable service and remove config (asks confirmation)
@@ -49,9 +50,9 @@ Dictation:
   --channels N              Channels (default: 1)
   --no-start-daemon         Do not auto-start ydotoold (use if you manage it separately)
   --ptt-key KEY             Push-to-talk key (default: KEY_RIGHTALT; requires python3-evdev)
-  --ptt-device PATH         Input device (default: auto-detect keyboard)
+  --ptt-device PATH         Input device (default: empty = auto-detect keyboard)
   --ptt-list-devices        List keyboard input devices for --ptt-device
-  --ptt-device-match STR    Prefer devices whose path contains STR
+  --ptt-device-match STR    Prefer devices whose path contains STR (plain substring, not regex; only when --ptt-device is empty)
   --paste-keys KEYS         Paste key combo (default: ctrl+v)
 
 Audio / gating / debug:
@@ -108,7 +109,6 @@ install_service() {
 # WHISPERER_PRINT_RMS=0
 # WHISPERER_RMS_SAMPLE_SECONDS=0.5
 # WHISPERER_DEBUG=0
-# WHISPERER_PTT=0
 # WHISPERER_PTT_KEY=KEY_RIGHTALT
 # WHISPERER_PTT_DEVICE=
 # WHISPERER_PTT_DEVICE_MATCH=
@@ -506,11 +506,12 @@ PRINT_RMS="${WHISPERER_PRINT_RMS:-0}"
 RMS_SAMPLE_SECONDS="${WHISPERER_RMS_SAMPLE_SECONDS:-0.5}"
 DEBUG="${WHISPERER_DEBUG:-0}"
 PASTE_KEYS="${WHISPERER_PASTE_KEYS:-ctrl+v}"
-PTT="${WHISPERER_PTT:-0}"
+PTT="1"
 PTT_KEY="${WHISPERER_PTT_KEY:-KEY_RIGHTALT}"
 PTT_DEVICE="${WHISPERER_PTT_DEVICE:-}"
 PTT_DEVICE_MATCH="${WHISPERER_PTT_DEVICE_MATCH:-}"
 PTT_LIST="0"
+ORIG_ARGC="$#"
 
 select_socket_path() {
   local uid
@@ -586,9 +587,9 @@ while [ $# -gt 0 ]; do
     --fix)
       FIX="1"; shift ;;
     --duration)
-      DURATION="${2:-}"; shift 2 ;;
+      DURATION="${2:-}"; PTT="0"; shift 2 ;;
     --loop)
-      LOOP="1"; shift ;;
+      LOOP="1"; PTT="0"; shift ;;
     --chunk-seconds)
       CHUNK_SECONDS="${2:-}"; shift 2 ;;
     --mode)
@@ -694,6 +695,10 @@ if [ "$PTT" = "1" ]; then
   record_pid=""
   tmp_wav=""
   tmp_json=""
+  if [ "$ORIG_ARGC" -eq 0 ]; then
+    ptt_key_msg="$(ptt_normalize_key "$PTT_KEY")"
+    printf "push-to-talk: hold %s to record\n" "$ptt_key_msg" >&2
+  fi
   while read -r evt; do
     case "$evt" in
       INFO:*)

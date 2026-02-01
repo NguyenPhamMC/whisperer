@@ -17,7 +17,7 @@ Main flow: push-to-talk (hold key). Extra modes: one-shot dictation (fixed durat
 
 No build step. Run directly:
 
-- `whisperer --ptt` (push-to-talk)
+- `whisperer` (push-to-talk)
 - `whisperer --duration 8` (one-shot)
 - `whisperer --loop --chunk-seconds 4` (loop)
 
@@ -49,7 +49,7 @@ Optional user service:
 - Uses `python3-evdev` to read key events from `/dev/input/...`.
 - Default key: `KEY_RIGHTALT` (some layouts use `KEY_ALTGR`).
 - Device auto-detect uses `/dev/input/by-id/*-event-kbd` and prefers device names containing “Keyboard”.
-- Optional selector: `WHISPERER_PTT_DEVICE_MATCH` substring.
+- Optional selector: `WHISPERER_PTT_DEVICE_MATCH` substring (plain text, not regex). Only used when `WHISPERER_PTT_DEVICE` is empty. Empty means no filter; auto-detect picks the best keyboard device. The literal string `auto-detect` is not special.
 - `--ptt-list-devices` lists candidates.
 - `--debug` prints selected device/key and key events.
 
@@ -66,7 +66,7 @@ Key env vars:
 - `WHISPERER_MODEL` (`whisper-1` default; also `gpt-4o-mini-transcribe`, `gpt-4o-transcribe`)
 - `WHISPERER_MODE` (`auto` | `type` | `paste`)
 - `WHISPERER_PASTE_KEYS` (`ctrl+v` or `ctrl+shift+v`)
-- `WHISPERER_PTT`, `WHISPERER_PTT_KEY`, `WHISPERER_PTT_DEVICE`, `WHISPERER_PTT_DEVICE_MATCH`
+- `WHISPERER_PTT_KEY`, `WHISPERER_PTT_DEVICE`, `WHISPERER_PTT_DEVICE_MATCH`
 - `WHISPERER_RMS_THRESHOLD`, `WHISPERER_RMS_SAMPLE_SECONDS`, `WHISPERER_PRINT_RMS`
 
 ## Debugging tips
