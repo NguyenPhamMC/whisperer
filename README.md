@@ -206,4 +206,4 @@ Environment variables (also supported in config file):
 - `WHISPERER_PTT_DEVICE` (default: empty = auto-detect; set to a `/dev/input/by-id/*-event-kbd` path from `whisperer --ptt-list-devices`. The literal string `auto-detect` is not special and will be treated as a path.)
 - `WHISPERER_PTT_DEVICE_MATCH` (default: empty; plain substring match on device path, not regex. Only used when `WHISPERER_PTT_DEVICE` is empty. When empty, no filter is applied and the best keyboard device is auto-detected.)
 
-Run `./bin/whisperer --help` for common options and `whisperer --help-advanced` for all options.
+Run `whisperer --help` for common options and `whisperer --help-advanced` for all options.
